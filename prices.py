@@ -1,35 +1,13 @@
 import random
 import numpy as np
 import math
-
+import matplotlib.pyplot as plt
 from itertools import chain
 
-
-def comb(n, k):
-    return math.factorial(n) / math.factorial(k) / math.factorial(n - k)
+from tools import shifted_irwin_hall
 
 
-def shifted_irwin_hall(start, end, n, x):
-    """
-    Let X_1, .., X_n iid with X_1 ~ U[start, end]
-    Let Z = sum(i=1, n, X_i)
-    Sample the pdf of Z
-    """
-    if end <= start:
-        raise ValueError
-
-    # Reshift so X_i ~ U[0,1]
-    x_shift = (x - n * start) / (end - start)
-
-    # Irwin-Hall-pdf (https://en.wikipedia.org/wiki/Irwin–Hall_distribution)
-    y = sum([1 / (2 * math.factorial(n - 1)) * (-1)**k * comb(n, k) *
-             (x_shift - k)**(n-1) * np.sign(x_shift - k) for k in range(n + 1)])
-    y[(x < start * n) | (x > end * n)] = 0
-
-    return y
-
-
-def decreasing_phase(begin, rate, len_, dec_range, base, end=None, end_rate=None, tol=0.01):
+def decreasing_phase(rate, len_, dec_range, base, end=None, end_rate=None, tol=0.00001):
     """
     Calculates the probabilities on a given day for a decreasing phase
     in the period [start, end]
@@ -48,76 +26,53 @@ def decreasing_phase(begin, rate, len_, dec_range, base, end=None, end_rate=None
 
     Returns a dict where each price is assigned a probability
     """
+    percents = dict()
+
     # Convert price to rate(s) that result in this price
     if not isinstance(rate, list):
-        # Must be in [rate/base, (rate-1)/base], make an interval with len % tol == 0
-        rate = [rate/base, rate/base - tol*int(1/tol*base)]
-    percents = dict()
+        rate = [rate/base, (rate+1)/base]
+
+    # Sample rates (including right border)
+    rates = np.arange(rate[0] + tol/2, rate[1] + tol/2 + tol/100, tol)
+
+    # Sample decreases and their probability
+    if len_ == 0:
+        decs = np.array([0])
+        probs = np.array([1])
+    else:
+        decs = np.arange(dec_range[0] * len_ + tol / 2,
+                         dec_range[1] * len_ + tol / 2, tol)
+        probs = shifted_irwin_hall(*dec_range, len_, decs) / len(decs)
+
     if end is None:
         # Only previous prices influence the wanted day
-        if isinstance(rate, list):
-            # Sample the rate
-            for r in np.arange(rate[0] + tol/2, rate[1] + tol/2, tol):
-                # Sample Irwin-Hall density
-                steps = np.arange(dec_range[0] * len_ + tol/2,
-                                  dec_range[1] * len_ + tol/2, tol)
-                vals = shifted_irwin_hall(*dec_range, len_, steps)
-
-                for price in [int(p) for p in np.ceil((r - vals) * base)]:
-                    # Probabilty of r and price assuming this phase is happening
-                    mult = tol**2 / ((dec_range[1] - dec_range[0]) * (rate[1] - rate[0]) * len_)
-                    percents[price] = percents.get(price, 0) + mult
-        else:
-            # Sample Irwin-Hall density
-            steps = np.arange(dec_range[0] * len_ + tol / 2,
-                              dec_range[1] * len_ + tol / 2, tol)
-            vals = shifted_irwin_hall(*dec_range, len_, steps)
-
-            for price in [int(p) for p in np.ceil((rate - vals) * base)]:
-                # Probabilty of price assuming this phase is happening
-                mult = tol / ((dec_range[1] - dec_range[0]) * len_)
-                percents[price] = percents.get(price, 0) + mult
+        for r in rates:
+            for price, prob in zip([int(p) for p in np.ceil((r - decs) * base)], probs):
+                percents[price] = percents.get(price, 0) + 1/len(rates) * prob
+        return percents
     else:
         len2 = end - len_
+        # Also sample decreases till end
 
-        # Only previous prices influence the wanted day
-        if isinstance(rate, list):
-            # Sample the rate
-            for r in np.arange(rate[0] + tol / 2, rate[1] + tol / 2, tol):
-                # Sample Irwin-Hall density
-                steps = np.arange(dec_range[0] * len_ + tol / 2,
-                                  dec_range[1] * len_ + tol / 2, tol)
-                # Also for the time till end
-                steps2 = np.arange(dec_range[0] * len2 + tol / 2,
-                                   dec_range[1] * len2 + tol / 2, tol)
-                vals1 = shifted_irwin_hall(*dec_range, len_, steps)
-                vals2 = shifted_irwin_hall(*dec_range, len2, steps2)
-
-                # Only use parts of vals1 that are possible
-                vals = [v1 for v1 in vals1 for v2 in vals2 if math.ceil((r - v1 - v2) * base) == end_rate]
-
-                for price in [int(p) for p in np.ceil((r - vals) * base)]:
-                    # Probabilty of r and p assuming this phase is happening
-                    mult = tol**3 / ((dec_range[1] - dec_range[0])**2 * (rate[1] - rate[0]) * len_ * len2)
-                    percents[price] = percents.get(price, 0) + mult
+        if len2 == 0:
+            decs2 = np.array([0])
+            probs2 = np.array([1])
         else:
-            # Sample Irwin-Hall density
-            steps = np.arange(dec_range[0] * len_ + tol / 2,
-                              dec_range[1] * len_ + tol / 2, tol)
-            # Also for the time till end
-            steps2 = np.arange(dec_range[0] * len2 + tol / 2,
-                               dec_range[1] * len2 + tol / 2, tol)
-            vals1 = shifted_irwin_hall(*dec_range, len_, steps)
-            vals2 = shifted_irwin_hall(*dec_range, len2, steps2)
+            decs2 = np.arange(dec_range[0] * len2 + tol / 2,
+                             dec_range[1] * len2 + tol / 2, tol)
+            probs2 = shifted_irwin_hall(*dec_range, len2, decs2) / len(decs2)
 
-            # Only use parts of vals1 that are possible
-            vals = [v1 for v1 in vals1 for v2 in vals2 if math.ceil((rate - v1 - v2) * base) == end_rate]
+        for r in rates:
+            # Only use parts of decs that are possible
+            pos_prices = [(int(np.ceil((r - d1) * base)), p1*p2)
+                          for d1, p1 in zip(decs, probs) for d2, p2 in zip(decs2, probs2)
+                          if math.ceil((r - d1 - d2) * base) == end_rate]
+            for price, prob in pos_prices:
+                percents[price] = percents.get(price, 0) + 1/len(rates) * prob
 
-            for price in [int(p) for p in np.ceil((rate - vals) * base)]:
-                # Probabilty of price assuming this phase is happening
-                mult = tol**2 / ((dec_range[1] - dec_range[0])**2 * len_ * len2)
-                percents[price] = percents.get(price, 0) + mult
-    return percents
+        # Because some combinations from dec, dec2 could be ruled out rescaling is necessary
+        scale = sum(list(percents.values()))
+        return {k: v/scale for k, v in percents.items()}
 
 
 def generate_pattern(last_pattern=None, weeks=None, last_known_pattern=3):
@@ -166,8 +121,9 @@ class RandomPattern:
         And so:
         P(B|X) = C_B / sum(all B, C_B)
         """
+        print(day)
         if day in self.knowns:
-            return {day: self.knowns[day]}
+            return {self.knowns[day]: 1}
         else:
             percents = dict()
             # All possible phase layouts
@@ -185,70 +141,87 @@ class RandomPattern:
                         inc_chances = dict()
                         for rate in np.arange(0.9 + self.tol / 2, 1.4 + self.tol / 2, self.tol):
                             price = math.ceil(rate * self.base_price)
-                            inc_chances[price] = inc_chances.get(price, 0) * self.tol / 0.5
+                            inc_chances[price] = inc_chances.get(price, 0) + self.tol / 0.5
 
                         chance = 1 / 2 * 1 / 7 * 1 / (7 - inc1_len)
+
                         # Adjust chance to reflect knowns
                         for d in self.knowns:
+                            val = self.knowns[d]
                             # INC
                             if d in inc_days:
-                                chance *= inc_chances[self.knowns[d]]
+                                if val not in inc_chances:
+                                    chance = 0
+                                else:
+                                    chance *= inc_chances[self.knowns[d]]
                             # DEC1
                             elif d in range(starts[0] + 1, starts[1] + 1):
                                 # Only depends on what was before
-                                begin = max([d for d in range(starts[0] + 1, starts[1] + 1)
-                                             if d < day and d in self.knowns], default=None)
-                                phase = decreasing_phase(begin=begin or starts[0], base=base_price,
-                                                         rate=self.knowns.get(begin, None) or [0.6, 0.8],
-                                                         len_=day - (begin or starts[0]), dec_range=[0.04, 1])
-                                chance *= phase[self.knowns[d]]
+                                begin = max([d_ for d_ in range(starts[0] + 1, starts[1] + 1)
+                                             if d_ < d and d_ in self.knowns], default=None)
+                                phase = decreasing_phase(rate=self.knowns.get(begin, None) or [0.6, 0.8],
+                                                         len_=d - (begin or starts[0] + 1), dec_range=[0.04, 0.1],
+                                                         base=self.base_price, tol=self.tol)
+                                if val not in phase:
+                                    chance = 0
+                                else:
+                                    chance *= phase[val]
                             # DEC2
                             elif d in range(starts[2] + 1, starts[3] + 1):
                                 # Only depends on what was before
-                                begin = max([d for d in range(starts[2] + 1, starts[3] + 1)
-                                             if d < day and d in self.knowns], default=None)
-                                phase = decreasing_phase(begin=begin or starts[2], base=base_price,
-                                                         rate=self.knowns.get(begin, None) or [0.6, 0.8],
-                                                         len_=day - (begin or starts[2]), dec_range=[0.04, 1])
-                                chance *= phase[self.knowns[d]]
+                                begin = max([d_ for d_ in range(starts[2] + 1, starts[3] + 1)
+                                             if d_ < d and d_ in self.knowns], default=None)
+                                phase = decreasing_phase(rate=self.knowns.get(begin, None) or [0.6, 0.8],
+                                                         len_=d - (begin or starts[2] + 1), dec_range=[0.04, 0.1],
+                                                         base=self.base_price, tol=self.tol)
+                                if val not in phase:
+                                    chance = 0
+                                else:
+                                    chance *= phase[val]
                             else:
                                 raise ValueError
 
-                        # INC
-                        if day in inc_days:
-                            # Sample at tol (e.g 0.01) and use mid <x+tol/2> of interval [x, x+tol]
-                            for price in inc_chances:
-                                percents[price] = percents.get(price, 0) + chance * inc_chances[price]
-                        # DEC1
-                        elif day in range(starts[0] + 1, starts[1] + 1):
-                            begin = max([d for d in range(starts[0] + 1, starts[1] + 1)
-                                         if d < day and d in self.knowns], default=None)
-                            end = min([d for d in range(starts[0] + 1, starts[1] + 1)
-                                       if d > day and d in self.knowns], default=None)
-                            phase = decreasing_phase(begin=begin or starts[0],
-                                                     rate=self.knowns.get(begin, None) or [0.6, 0.8],
-                                                     len_=day - (begin or starts[0]), dec_range=[0.04, 1],
-                                                     base=base_price, end=end, end_rate=self.knowns.get(end, None))
-                            for price in phase:
-                                percents[price] = percents.get(price, 0) + chance * phase[price]
-                        # DEC2
-                        elif day in range(starts[2] + 1, starts[3] + 1):
-                            begin = max([d for d in range(starts[2] + 1, starts[3] + 1)
-                                         if d < day and d in self.knowns], default=None)
-                            end = min([d for d in range(starts[2] + 1, starts[3] + 1)
-                                       if d > day and d in self.knowns], default=None)
-                            phase = decreasing_phase(begin=begin or starts[2],
-                                                     rate=self.knowns.get(begin, None) or [0.6, 0.8],
-                                                     len_=day - (begin or starts[2]), dec_range=[0.04, 1],
-                                                     base=base_price, end=end, end_rate=self.knowns.get(end, None))
-                            for price in phase:
-                                percents[price] = percents.get(price, 0) + phase[price] * chance
-                        else:
-                            raise ValueError
+                        if chance > 0:
+                            # INC
+                            if day in inc_days:
+                                # Sample at tol (e.g 0.01) and use mid <x+tol/2> of interval [x, x+tol]
+                                for price in inc_chances:
+                                    percents[price] = percents.get(price, 0) + chance * inc_chances[price]
+                            # DEC1
+                            elif day in range(starts[0] + 1, starts[1] + 1):
+                                begin = max([d for d in range(starts[0] + 1, starts[1] + 1)
+                                             if d < day and d in self.knowns], default=None)
+                                end = min([d for d in range(starts[0] + 1, starts[1] + 1)
+                                           if d > day and d in self.knowns], default=None)
+                                phase = decreasing_phase(rate=self.knowns.get(begin, None) or [0.6, 0.8],
+                                                         end=end, end_rate=self.knowns.get(end, None),
+                                                         len_=day - (begin or starts[0] + 1), dec_range=[0.04, 0.1],
+                                                         base=self.base_price, tol=self.tol)
+                                for price in phase:
+                                    percents[price] = percents.get(price, 0) + chance * phase[price]
+                            # DEC2
+                            elif day in range(starts[2] + 1, starts[3] + 1):
+                                begin = max([d for d in range(starts[2] + 1, starts[3] + 1)
+                                             if d < day and d in self.knowns], default=None)
+                                end = min([d for d in range(starts[2] + 1, starts[3] + 1)
+                                           if d > day and d in self.knowns], default=None)
+                                phase = decreasing_phase(rate=self.knowns.get(begin, None) or [0.6, 0.8],
+                                                         end=end, end_rate=self.knowns.get(end, None),
+                                                         len_=day - (begin or starts[2] + 1), dec_range=[0.04, 0.1],
+                                                         base=self.base_price, tol=self.tol)
+                                for price in phase:
+                                    percents[price] = percents.get(price, 0) + chance * phase[price]
+                            else:
+                                raise ValueError
 
             # Rescale
             scale = sum(list(percents.values()))
-            return {k: v/scale for k, v in percents.items()}
+            percents = {k: v/scale for k, v in percents.items()}
+
+            # plt.bar(list(percents.keys()), list(percents.values()))
+            # plt.show()
+
+            return percents
 
     def gen(self):
         # Phase lengths
@@ -348,12 +321,5 @@ class SmallSpike:
 
 if __name__ == "__main__":
     base_price = random.randint(90, 110)
-    print(RandomPattern(base_price).probs(3))
-    print(RandomPattern(base_price).probs(5))
-    print(RandomPattern(base_price).probs(8))
-    print(generate_pattern(last_pattern=2))
-    print(generate_pattern(weeks=1000))
-    print(RandomPattern(base_price).gen())
-    print(LargeSpike(base_price).gen())
-    print(Decreasing(base_price).gen())
-    print(SmallSpike(base_price).gen())
+
+    prediction = [RandomPattern(base_price=98, knowns={1: 94, 2: 95, 3:75}, tol=0.0005).probs(i) for i in range(1, 13)]
