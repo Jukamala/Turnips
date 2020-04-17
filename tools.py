@@ -18,12 +18,12 @@ def shifted_irwin_hall(start, end, n, x):
     if n == 0:
         raise ValueError
 
-    # Shift so X_i ~ U[0,1]
-    x_shift = (x - n * start) / (end - start)
+    # Shift so X_i ~ U[0,1] and all elements are 0 < e < n
+    x_shift = (x - n * start) / (end - start + 1e-8) + 1e-16
 
     # Irwin-Hall-pdf (https://en.wikipedia.org/wiki/Irwin–Hall_distribution)
     y = sum([1 / (2 * math.factorial(n - 1)) * (-1)**k * comb(n, k) *
              (x_shift - k)**(n-1) * np.sign(x_shift - k) for k in range(n + 1)])
-    y[(x < start * n) | (x > end * n)] = 0
+    y[(x_shift < 0) | (x_shift > n)] = 0
 
     return y
